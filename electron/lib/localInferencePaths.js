@@ -8,13 +8,8 @@ function normalizeDirOverride(value) {
 
 function resolveLocalAiPaths({ userDataPath, env = process.env } = {}) {
     const customDir = normalizeDirOverride(env[LOCAL_AI_DIR_ENV]);
-
-    if (!customDir && !userDataPath) {
-        throw new Error(`userDataPath is required when ${LOCAL_AI_DIR_ENV} is not set`);
-    }
-
+    if (!customDir && !userDataPath) throw new Error(`userDataPath is required when ${LOCAL_AI_DIR_ENV} is not set`);
     const dataDir = path.resolve(customDir || path.join(userDataPath, 'local-ai'));
-
     return {
         dataDir,
         binDir: path.join(dataDir, 'bin'),
@@ -23,7 +18,4 @@ function resolveLocalAiPaths({ userDataPath, env = process.env } = {}) {
     };
 }
 
-module.exports = {
-    LOCAL_AI_DIR_ENV,
-    resolveLocalAiPaths,
-};
+module.exports = { LOCAL_AI_DIR_ENV, resolveLocalAiPaths };

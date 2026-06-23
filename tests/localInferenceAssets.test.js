@@ -12,13 +12,7 @@ test('pickBinaryAssetForPlatform prefers native linux arm64 assets', () => {
         'sd-master-abc-bin-Linux-Ubuntu-24.04-aarch64.zip',
         'sd-master-abc-bin-Linux-Ubuntu-24.04-aarch64-vulkan.zip',
     ];
-
-    const picked = pickBinaryAssetForPlatform({
-        platform: 'linux',
-        arch: 'arm64',
-        zipNames,
-    });
-
+    const picked = pickBinaryAssetForPlatform({ platform: 'linux', arch: 'arm64', zipNames });
     assert.equal(picked, 'sd-master-abc-bin-Linux-Ubuntu-24.04-aarch64.zip');
 });
 
@@ -28,9 +22,5 @@ test('getBundledBinaryResourceDir resolves linux arm64 bundled path', () => {
         platform: 'linux',
         arch: 'arm64',
     });
-
-    assert.equal(
-        bundledDir,
-        '/opt/Open Generative AI/resources/local-ai/linux-arm64/bin'
-    );
+    assert.equal(bundledDir, '/opt/Open Generative AI/resources/local-ai/linux-arm64/bin');
 });

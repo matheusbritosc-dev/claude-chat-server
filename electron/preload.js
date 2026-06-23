@@ -2,19 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('localAI', {
     isElectron: true,
-
     getBinaryStatus: () => ipcRenderer.invoke('local-ai:binary-status'),
     downloadBinary: () => ipcRenderer.invoke('local-ai:download-binary'),
-
     listModels: () => ipcRenderer.invoke('local-ai:list-models'),
     downloadModel: (modelId) => ipcRenderer.invoke('local-ai:download-model', modelId),
     downloadAuxiliary: (auxKey) => ipcRenderer.invoke('local-ai:download-auxiliary', auxKey),
     deleteModel: (modelId) => ipcRenderer.invoke('local-ai:delete-model', modelId),
     cancelDownload: (modelId) => ipcRenderer.invoke('local-ai:cancel-download', modelId),
-
     generate: (params) => ipcRenderer.invoke('local-ai:generate', params),
     cancelGeneration: () => ipcRenderer.invoke('local-ai:cancel-generation'),
-
     wan2gp: {
         getConfig:  () => ipcRenderer.invoke('wan2gp:get-config'),
         setUrl:     (url) => ipcRenderer.invoke('wan2gp:set-url', url),
@@ -24,7 +20,6 @@ contextBridge.exposeInMainWorld('localAI', {
         cancelGeneration: () => ipcRenderer.invoke('wan2gp:cancel-generation'),
         uploadFile: (payload) => ipcRenderer.invoke('wan2gp:upload-file', payload),
     },
-
     onProgress: (callback) => {
         const listener = (_, data) => callback(data);
         ipcRenderer.on('local-ai:progress', listener);

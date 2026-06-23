@@ -1,63 +1,59 @@
-# 🤖 Claude Chat Server
+# Open Generative AI — Open-Source Alternative to AI Video Platforms
 
-> Servidor Node.js para chat com Claude AI + Bot Telegram
+[![Powered by MuAPI](https://img.shields.io/badge/Powered%20by-MuAPI-6366f1?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0tMSAxNHYtNGgtMnYtMmg0djZoLTJ6bTAtOFY2aDJ2MmgtMnoiLz48L3N2Zz4=)](https://muapi.ai?utm_source=github&utm_medium=badge&utm_campaign=open-generative-ai)
 
-![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)
-![Claude](https://img.shields.io/badge/Claude-AI-6B4FBB?logo=anthropic&logoColor=white)
-![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green)
 
-## 📋 Sobre
+> **The free, open-source alternative to AI Video Platforms.** Generate AI images and videos using 200+ state-of-the-art models — no content filters, no closed ecosystem, no subscription fees.
 
-Servidor HTTP leve em Node.js puro (sem frameworks) que integra a **Claude AI** via CLI, com interface web de chat e bot Telegram. Permite conversar com Claude através de um navegador web ou via Telegram.
+**Community:** Join [Reddit](https://www.reddit.com/r/muapi) & [Discord](https://discord.gg/QhTrNRU4r3) for discussions and support
 
-### ✨ Features
+> **Latest Gemini Omni model from Google best prompts and resources:** [Gemini Omni Resources](https://github.com/Anil-matcha/Awesome-Gemini-Omni-API-Prompts)
 
-- 💬 **Chat Web** — Interface de chat no browser com UI moderna
-- 🤖 **Bot Telegram** — Converse com Claude pelo Telegram
-- 🔄 **Sessões** — Mantém contexto entre mensagens
-- ⚡ **Zero dependências externas** — Server HTTP nativo do Node.js
-- 🕐 **Timeout de 5 min** — Para respostas longas do Claude
+> **Automate media generations with AI coding agents:** [Generative-Media-Skills](https://github.com/SamurAIGPT/Generative-Media-Skills)
 
-## 🏗️ Arquitetura
+> **Seedance 2.5 prompts & API guide:** [awesome-seedance-2.5-api-prompts](https://github.com/Anil-matcha/awesome-seedance-2.5-api-prompts)
 
-```
-claude-chat-server/
-├── server.js           # Servidor HTTP + API de chat
-├── index.html          # Interface web do chat
-├── telegram-bot.js     # Bot Telegram integrado
-└── package.json        # Configuração do projeto
-```
+> **Claude Fable 5 use cases + 20% off on MuAPI:** [awesome-claude-fable-5](https://github.com/Anil-matcha/awesome-claude-fable-5)
 
-## 🚀 Como Executar
+## Related Projects
+
+- [Vadoo](https://vadoo.tv)
+- [awesome-claude-fable-5](https://github.com/Anil-matcha/awesome-claude-fable-5)
+- [Generative-Media-Skills](https://github.com/SamurAIGPT/Generative-Media-Skills)
+- [AI-Youtube-Shorts-Generator](https://github.com/SamurAIGPT/AI-Youtube-Shorts-Generator)
+- [muapi-cli](https://github.com/SamurAIGPT/muapi-cli)
+- [Vibe-Workflow](https://github.com/SamurAIGPT/Vibe-Workflow)
+- [Text-To-Video-AI](https://github.com/SamurAIGPT/Text-To-Video-AI)
+- [muapi-comfyui](https://github.com/SamurAIGPT/muapi-comfyui)
+- [n8n-nodes-muapi](https://github.com/SamurAIGPT/n8n-nodes-muapi)
+- [Open-AI-Design-Agent](https://github.com/Anil-matcha/Open-AI-Design-Agent)
+- [Free-AI-Social-Media-Scheduler](https://github.com/Anil-matcha/Free-AI-Social-Media-Scheduler)
+- [awesome-seedance-2.5-api-prompts](https://github.com/Anil-matcha/awesome-seedance-2.5-api-prompts)
+- [AI-Voice-Agent](https://github.com/Anil-matcha/AI-Voice-Agent)
+
+## Try it Online
+
+**Hosted version:** https://muapi.ai/open-generative-ai
+
+## Download Desktop App
+
+| Platform | Download |
+|---|---|
+| macOS Apple Silicon | Open Generative AI-1.0.9-arm64.dmg |
+| macOS Intel | Open Generative AI-1.0.9.dmg |
+| Windows | Open Generative AI Setup 1.0.9.exe |
+| Linux | v1.0.9 release |
+
+## Quick Start
 
 ```bash
-# 1. Clone o repositório
-git clone https://github.com/matheusbritosc-dev/claude-chat-server.git
-cd claude-chat-server
-
-# 2. Instale as dependências
-npm install
-
-# 3. Execute o servidor
-node server.js
-
-# Acesse: http://localhost:3456
+git clone --recurse-submodules https://github.com/Anil-matcha/Open-Generative-AI.git
+cd Open-Generative-AI
+npm run setup
+npm run electron:dev   # Desktop app
+npm run dev            # Web version
 ```
 
-### Bot Telegram
-```bash
-# Configure o token do bot no arquivo
-node telegram-bot.js
-```
+## License
 
-## 🛠️ Tech Stack
-
-- **Runtime:** Node.js 18+
-- **HTTP:** Módulo nativo `http` (zero frameworks)
-- **IA:** Claude CLI (Anthropic)
-- **Bot:** API Telegram
-
-## 📄 Licença
-
-MIT License — Desenvolvido por **Matheus Brito**
+MIT
