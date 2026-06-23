@@ -5,9 +5,6 @@ import fs from 'fs';
 export default async function afterPack({ appOutDir, packager }) {
     const platformName = packager.platform.name;
 
-    // Remove Next.js SWC native binaries that don't belong on this target platform.
-    // They are bundled because `next` is in dependencies, but only the host-platform
-    // binary is ever used at runtime in the Electron app.
     const nextDir = path.join(appOutDir,
         platformName === 'mac'
             ? `${packager.appInfo.productName}.app/Contents/Resources`
