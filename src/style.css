@@ -1,6 +1,7 @@
 @import './styles/global.css';
 @import './styles/studio.css';
 
+/* App-specific layout */
 #app {
   display: flex;
   flex-direction: column;
@@ -17,6 +18,7 @@ main {
   display: flex;
 }
 
+/* Utilities */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }

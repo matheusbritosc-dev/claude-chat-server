@@ -5,6 +5,7 @@ import { ImageStudio } from './components/ImageStudio.js';
 const app = document.querySelector('#app');
 let contentArea;
 
+// Router
 function navigate(page) {
   if (!contentArea) return;
   contentArea.innerHTML = '';
@@ -39,6 +40,7 @@ function navigate(page) {
 }
 
 app.innerHTML = '';
+// Pass navigate to Header so links work
 app.appendChild(Header(navigate));
 
 contentArea = document.createElement('main');
@@ -46,8 +48,10 @@ contentArea.id = 'content-area';
 contentArea.className = 'flex-1 relative w-full overflow-hidden flex flex-col bg-app-bg';
 app.appendChild(contentArea);
 
+// Initial Route
 navigate('image');
 
+// Event Listener for Navigation
 window.addEventListener('navigate', (e) => {
   if (e.detail.page === 'settings') {
     import('./components/SettingsModal.js').then(({ SettingsModal }) => {
