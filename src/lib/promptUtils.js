@@ -54,6 +54,9 @@ export const APERTURE_EFFECT = {
     "f/11": "deep focus clarity, sharp foreground to background"
 };
 
+/**
+ * Compiles a cinematic prompt based on camera settings.
+ */
 export function buildNanoBananaPrompt(basePrompt, camera, lens, focalLength, aperture) {
     const cameraDesc = CAMERA_MAP[camera] || camera;
     const lensDesc = LENS_MAP[lens] || lens;
