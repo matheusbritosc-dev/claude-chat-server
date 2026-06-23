@@ -20,10 +20,6 @@ async function fetchUserData(apiKey) {
 export default async function CreateAgentPage() {
   const cookieStore = await cookies();
   const apiKey = cookieStore.get("muapi_key")?.value;
-
   const userData = await fetchUserData(apiKey);
-
-  return (
-    <AgentCreateClient userData={userData} />
-  );
+  return <AgentCreateClient userData={userData} />;
 }

@@ -25,7 +25,6 @@ export default function AgentCreateClient({ userData }) {
     interceptorRef.current = axios.interceptors.request.use((config) => {
       const isRelative = config.url.startsWith("/") || !config.url.startsWith("http");
       const isInternalProxy = config.url.includes('/api/app') || config.url.includes('/api/workflow') || config.url.includes('/api/agents') || config.url.includes('/api/api') || config.url.includes('/api/v1');
-      
       if (isRelative || isInternalProxy) {
         config.headers["x-api-key"] = apiKey;
       }
@@ -53,10 +52,5 @@ export default function AgentCreateClient({ userData }) {
     [userData]
   );
 
-  return (
-    <CreateAgentPage
-      useUser={useUser}
-      usedIn="studio"
-    />
-  );
+  return <CreateAgentPage useUser={useUser} usedIn="studio" />;
 }

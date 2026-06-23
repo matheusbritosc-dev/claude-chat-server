@@ -13,10 +13,7 @@ export async function POST(request) {
                 s3FormData.append(key, value);
             }
         }
-        const s3Response = await fetch(targetUrl, {
-            method: 'POST',
-            body: s3FormData,
-        });
+        const s3Response = await fetch(targetUrl, { method: 'POST', body: s3FormData });
         if (s3Response.ok || s3Response.status === 204) {
             return new Response(null, { status: 204 });
         } else {
