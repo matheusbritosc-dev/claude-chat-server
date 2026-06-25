@@ -3,18 +3,14 @@
 /**
  * MÓDULO 3 — Video Editor / Post Composer
  *
- * Integra técnicas do MoneyPrinterTurbo:
- *  - Narração em voz pt-BR via Edge TTS (gratuito)
- *  - Captions persuasivos gerados por IA (Claude Haiku)
- *  - B-roll do Pexels quando produto não tem imagem
- *  - ffmpeg para composição final: overlay de texto, watermark, música, voz
- *
- * Fluxo por produto:
- *  1. Baixa vídeo bruto (Higgsfield ou B-roll)
- *  2. Gera narração TTS (se edge-tts disponível)
- *  3. Gera caption com IA (se ANTHROPIC_API_KEY configurado)
- *  4. Compõe vídeo final com ffmpeg
- *  5. Salva video_local_path, video_public_url e caption no banco
+ * Pipeline completo por produto:
+ *  1. Baixa vídeo bruto (Higgsfield / muapi / Pexels)
+ *  2. Gera narração com voz clonada (GPT-SoVITS → Edge TTS → nada)
+ *  3. Gera caption persuasivo com IA (Claude Haiku → template)
+ *  4. Gera clipe do avatar falando (foto + lip sync) — opcional
+ *  5. Compõe vídeo final com ffmpeg
+ *     [Avatar intro] + [Produto com texto + preço + música + voz]
+ *  6. Salva video_local_path, video_public_url, caption no banco
  */
 
 const { execFile } = require('child_process');
@@ -24,8 +20,10 @@ const https = require('https');
 const http  = require('http');
 
 const { generateCaption, aiNarration } = require('./captioner');
-const { generateTTS, getAudioDuration } = require('./tts');
-const { query }  = require('../db/database');
+const { getAudioDuration }             = require('./tts');
+const { generateNarration }            = require('./voice-clone');
+const { generateAvatarClip, prependAvatarToVideo } = require('./avatar');
+const { query }        = require('../db/database');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('editor');
@@ -201,25 +199,55 @@ async function processProduct(product) {
   log.info(`Baixando vídeo bruto [${product.id}]`);
   await downloadFile(rawUrl, rawPath);
 
-  // 2. Gera narração TTS (em paralelo com caption)
-  let generatedTtsPath = null;
-  const [{ caption }, narrationText] = await Promise.all([
+  // 2. Gera caption IA + narração com voz clonada (em paralelo)
+  const narrationPath = path.join(OUTPUT_DIR, `product_${product.id}_narr.wav`);
+  const [{ caption }, narrationResult] = await Promise.all([
     generateCaption(product),
-    aiNarration(product).catch(() => null),
+    aiNarration(product)
+      .then(text => text ? generateNarration(text, narrationPath) : null)
+      .catch(() => null),
   ]);
 
-  if (narrationText) {
-    generatedTtsPath = await generateTTS({ text: narrationText, outputPath: ttsPath });
-  }
+  const generatedTtsPath = narrationResult?.path || null;
+  if (narrationResult) log.info(`Narração: ${narrationResult.source}`);
 
-  // 3. Compõe vídeo final
+  // 3. Compõe vídeo do produto com ffmpeg
   const { localPath, publicUrl } = await compose({
     product,
     rawVideoPath: rawPath,
-    ttsPath: generatedTtsPath,
+    ttsPath:      generatedTtsPath,
   });
 
-  // 4. Persiste no banco
+  // 4. Gera clipe do avatar (foto do usuário + lip sync) e prepende ao vídeo
+  let finalLocalPath = localPath;
+  let finalPublicUrl = publicUrl;
+  const avatarPath = await generateAvatarClip({
+    localAudioPath:  generatedTtsPath,
+    audioPublicUrl:  generatedTtsPath
+      ? `${PUBLIC_BASE}/videos/${path.basename(generatedTtsPath)}`
+      : null,
+    productId: product.id,
+  });
+
+  if (avatarPath) {
+    const withAvatarPath = path.join(OUTPUT_DIR, `product_${product.id}_with_avatar.mp4`);
+    try {
+      await prependAvatarToVideo({
+        avatarPath,
+        productVideoPath: localPath,
+        outputPath:       withAvatarPath,
+      });
+      // Substitui o vídeo final pelo que tem o avatar
+      fs.unlinkSync(localPath);
+      fs.renameSync(withAvatarPath, localPath);
+      log.info(`Avatar integrado ao vídeo [${product.id}]`);
+    } catch (err) {
+      log.warn(`Avatar não pôde ser integrado: ${err.message}`);
+    }
+    fs.unlink(avatarPath, () => {});
+  }
+
+  // 5. Persiste no banco
   await query(
     `UPDATE products_queue
         SET status           = 'composed',
@@ -228,11 +256,11 @@ async function processProduct(product) {
             caption          = $3,
             updated_at       = NOW()
       WHERE id = $4`,
-    [localPath, publicUrl, caption, product.id]
+    [finalLocalPath, finalPublicUrl, caption, product.id]
   );
 
-  // 5. Limpeza
-  [rawPath, ttsPath].forEach(p => fs.unlink(p, () => {}));
+  // 6. Limpeza
+  [rawPath, narrationPath].forEach(p => fs.unlink(p, () => {}));
 
   log.info(`Produto [${product.id}] composto. URL: ${publicUrl}`);
   return { localPath, publicUrl, caption };

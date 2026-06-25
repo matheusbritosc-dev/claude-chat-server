@@ -22,12 +22,13 @@ async function runPipeline(step) {
     generate: () => require('./src/higgsfield/generator').run(),
     compose:  () => require('./src/editor/composer').run(),
     publish:  () => require('./src/instagram/publisher').run(),
+    stories:  () => require('./src/instagram/stories').run(),
     respond:  () => require('./src/instagram/responder').run(),
   };
 
   if (step === 'full') {
     log.info('=== PIPELINE COMPLETO ===');
-    for (const s of ['fetch', 'generate', 'compose', 'publish', 'respond']) {
+    for (const s of ['fetch', 'generate', 'compose', 'publish', 'stories', 'respond']) {
       log.info(`-- ${s} --`);
       await steps[s]();
     }
@@ -220,9 +221,17 @@ async function handleRequest(req, res) {
     return sendDashboard(res);
   }
 
-  // Servir vídeos compostos (o Instagram Meta baixa daqui)
+  // Servir vídeos e áudios compostos (Meta Graph API baixa daqui)
   if (req.method === 'GET' && req.url.startsWith('/videos/')) {
     return serveVideo(req, res);
+  }
+
+  // Servir foto do avatar (para lip sync APIs externas)
+  if (req.method === 'GET' && req.url === '/avatar/photo.jpg') {
+    const avatarPath = path.join(__dirname, 'assets/avatar/photo.jpg');
+    if (!fs.existsSync(avatarPath)) { res.writeHead(404); return res.end('Avatar photo not found'); }
+    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+    return fs.createReadStream(avatarPath).pipe(res);
   }
 
   // Status JSON
@@ -272,11 +281,14 @@ function scheduleCron() {
       runPipeline('fetch').then(() => runPipeline('generate')).catch(e => log.error('[CRON]', { error: e.message }));
     }
 
-    // 08h00 e 20h00 → compose + publish
+    // 08h00 e 20h00 → compose + publish + stories
     if ([8, 20].includes(h) && m === 0 && !seen.has(key('publish'))) {
       seen.add(key('publish'));
-      log.info(`[CRON ${h}h] compose → publish`);
-      runPipeline('compose').then(() => runPipeline('publish')).catch(e => log.error('[CRON]', { error: e.message }));
+      log.info(`[CRON ${h}h] compose → publish → stories`);
+      runPipeline('compose')
+        .then(() => runPipeline('publish'))
+        .then(() => runPipeline('stories'))
+        .catch(e => log.error('[CRON]', { error: e.message }));
     }
 
     // A cada 30 min → respond
