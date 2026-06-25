@@ -25,6 +25,7 @@ logs/
 tmp/
 assets/music/*.mp3
 assets/logo.png
+assets/voice/
 
 # PM2
 .pm2/

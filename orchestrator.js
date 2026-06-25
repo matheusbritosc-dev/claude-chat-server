@@ -227,10 +227,14 @@ async function handleRequest(req, res) {
   }
 
   // Servir foto do avatar (para lip sync APIs externas)
-  if (req.method === 'GET' && req.url === '/avatar/photo.jpg') {
-    const avatarPath = path.join(__dirname, 'assets/avatar/photo.jpg');
+  // Aceita /avatar/photo.jpg ou /avatar/photo.png
+  if (req.method === 'GET' && req.url.startsWith('/avatar/photo')) {
+    const jpgPath = path.join(__dirname, 'assets/avatar/photo.jpg');
+    const pngPath = path.join(__dirname, 'assets/avatar/photo.png');
+    const avatarPath = fs.existsSync(jpgPath) ? jpgPath : pngPath;
     if (!fs.existsSync(avatarPath)) { res.writeHead(404); return res.end('Avatar photo not found'); }
-    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+    const isPng = avatarPath.endsWith('.png') || fs.readFileSync(avatarPath).slice(0, 4).toString('hex') === '89504e47';
+    res.writeHead(200, { 'Content-Type': isPng ? 'image/png' : 'image/jpeg' });
     return fs.createReadStream(avatarPath).pipe(res);
   }
 
