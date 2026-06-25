@@ -124,6 +124,16 @@ function sendDashboard(res) {
     button:hover{background:#e85e2b}
     button.secondary{background:#242424;color:#e5e5e5}
     button.secondary:hover{background:#333}
+    .add-form{background:#1a1a1a;border-radius:10px;padding:20px;margin-bottom:28px}
+    .add-form h2{font-size:.95rem;color:#ff6b35;margin-bottom:14px}
+    .add-form .row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+    .add-form .row.full{grid-template-columns:1fr}
+    .add-form input{background:#0f0f0f;border:1px solid #333;border-radius:6px;padding:8px 12px;color:#e5e5e5;font-size:.82rem;width:100%}
+    .add-form input::placeholder{color:#555}
+    .add-form button{margin-top:6px;width:100%;background:#ff6b35}
+    #add-result{font-size:.8rem;margin-top:8px;padding:6px 10px;border-radius:6px;display:none}
+    #add-result.ok{background:#16a34a22;color:#4ade80}
+    #add-result.err{background:#7f1d1d22;color:#f87171}
     #log{background:#0a0a0a;border-radius:8px;padding:12px;font-family:monospace;font-size:.78rem;height:160px;overflow-y:auto;color:#4ade80;margin-top:20px;display:none}
     a{color:#60a5fa;text-decoration:none}
     a:hover{text-decoration:underline}
@@ -138,6 +148,27 @@ function sendDashboard(res) {
     <div class="card"><div class="n" id="n-video">…</div><div class="l">Vídeos prontos</div></div>
     <div class="card"><div class="n" id="n-composed">…</div><div class="l">Compostos</div></div>
     <div class="card"><div class="n" id="n-published">…</div><div class="l">Publicados</div></div>
+  </div>
+
+  <div class="add-form">
+    <h2>+ Adicionar Produto Manualmente</h2>
+    <div class="row full">
+      <input id="p-name" placeholder="Nome do produto (ex: Fone Bluetooth TWS i12)" />
+    </div>
+    <div class="row">
+      <input id="p-link" placeholder="Link afiliado Shopee (shope.ee/...)" />
+      <input id="p-image" placeholder="URL da imagem do produto (opcional)" />
+    </div>
+    <div class="row">
+      <input id="p-price" placeholder="Preço original (ex: 89.90)" type="number" step="0.01" />
+      <input id="p-discount" placeholder="Preço com desconto (ex: 49.90)" type="number" step="0.01" />
+    </div>
+    <div class="row">
+      <input id="p-commission" placeholder="% comissão (ex: 10)" type="number" step="0.1" />
+      <input id="p-desc" placeholder="Descrição curta (opcional)" />
+    </div>
+    <button onclick="addProduct()">Adicionar e Gerar Vídeo</button>
+    <div id="add-result"></div>
   </div>
 
   <div class="btns">
@@ -196,6 +227,38 @@ function sendDashboard(res) {
       log.scrollTop = log.scrollHeight;
     }
 
+    async function addProduct() {
+      const name = document.getElementById('p-name').value.trim();
+      const link = document.getElementById('p-link').value.trim();
+      const res  = document.getElementById('add-result');
+      if (!name || !link) { res.className='err'; res.style.display='block'; res.textContent='Nome e link afiliado são obrigatórios'; return; }
+      res.style.display='none';
+      try {
+        const r = await fetch('/api/product/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            affiliate_link:  link,
+            image_url:       document.getElementById('p-image').value.trim() || null,
+            price_original:  parseFloat(document.getElementById('p-price').value) || 0,
+            price_discount:  parseFloat(document.getElementById('p-discount').value) || 0,
+            commission_pct:  parseFloat(document.getElementById('p-commission').value) || 0,
+            short_desc:      document.getElementById('p-desc').value.trim() || null,
+          })
+        });
+        const d = await r.json();
+        if (d.ok) {
+          res.className='ok'; res.style.display='block';
+          res.textContent='Produto adicionado! ID: '+d.id+' — clique em "2. Gerar Vídeos" para iniciar.';
+          ['p-name','p-link','p-image','p-price','p-discount','p-commission','p-desc'].forEach(id=>document.getElementById(id).value='');
+          setTimeout(load, 1000);
+        } else {
+          res.className='err'; res.style.display='block'; res.textContent='Erro: '+(d.error||'desconhecido');
+        }
+      } catch(e) { res.className='err'; res.style.display='block'; res.textContent='Erro: '+e.message; }
+    }
+
     load();
     setInterval(load, 30000);
   </script>
@@ -248,6 +311,39 @@ async function handleRequest(req, res) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: false, error: err.message }));
     }
+  }
+
+  // Adicionar produto manualmente: POST /api/product/add
+  if (req.method === 'POST' && req.url === '/api/product/add') {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', async () => {
+      try {
+        const p = JSON.parse(body);
+        if (!p.name || !p.affiliate_link) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: 'name e affiliate_link obrigatórios' }));
+        }
+        const shopeeId = `manual_${Date.now()}`;
+        const result = await query(
+          `INSERT INTO products_queue
+            (shopee_id, name, affiliate_link, image_url, price_original, price_discount, commission_pct, short_desc, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')
+           ON CONFLICT (shopee_id) DO NOTHING
+           RETURNING id`,
+          [shopeeId, p.name, p.affiliate_link, p.image_url || null,
+           p.price_original || 0, p.price_discount || 0,
+           p.commission_pct || 0, p.short_desc || null]
+        );
+        const id = result.rows[0]?.id;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, id }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    });
+    return;
   }
 
   // Trigger manual: POST /api/run/:step
