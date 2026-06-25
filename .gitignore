@@ -19,3 +19,12 @@ Thumbs.db
 # Logs
 *.log
 webhook-logs.json
+logs/
+
+# Build / runtime artifacts
+tmp/
+assets/music/*.mp3
+assets/logo.png
+
+# PM2
+.pm2/

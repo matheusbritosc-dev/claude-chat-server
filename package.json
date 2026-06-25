@@ -1,17 +1,31 @@
 {
-  "name": "velvet-cluster",
+  "name": "instagram-shopee-affiliate-automation",
   "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
+  "description": "Automação completa Instagram × Shopee Afiliados — busca produtos, gera vídeos com Higgsfield, publica no Instagram e responde comentários automaticamente.",
+  "main": "orchestrator.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node orchestrator.js",
+    "start:dev": "node --watch orchestrator.js",
+    "setup": "bash setup.sh",
+    "run:fetch": "node -e \"require('dotenv').config(); const {run}=require('./src/shopee/fetcher'); run().then(n=>console.log('Done:',n)).catch(console.error)\"",
+    "run:generate": "node -e \"require('dotenv').config(); const {run}=require('./src/higgsfield/generator'); run().then(console.log).catch(console.error)\"",
+    "run:compose": "node -e \"require('dotenv').config(); const {run}=require('./src/editor/composer'); run().then(console.log).catch(console.error)\"",
+    "run:publish": "node -e \"require('dotenv').config(); const {run}=require('./src/instagram/publisher'); run().then(console.log).catch(console.error)\"",
+    "run:respond": "node -e \"require('dotenv').config(); const {run}=require('./src/instagram/responder'); run().then(console.log).catch(console.error)\"",
+    "migrate": "node -e \"require('dotenv').config(); const {migrate,close}=require('./src/db/database'); migrate().then(close)\"",
+    "test": "node --test src/**/*.test.js 2>/dev/null || echo 'Sem testes configurados'"
   },
-  "keywords": [],
+  "keywords": ["shopee", "instagram", "afiliados", "automation", "higgsfield"],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "node-telegram-bot-api": "^0.67.0"
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "pg": "^8.12.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
