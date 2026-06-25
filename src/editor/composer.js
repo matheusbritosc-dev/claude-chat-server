@@ -193,11 +193,18 @@ async function processProduct(product) {
   const rawPath = path.join(OUTPUT_DIR, `product_${product.id}_raw.mp4`);
   const ttsPath = path.join(OUTPUT_DIR, `product_${product.id}_tts.mp3`);
 
-  // 1. Baixa vídeo bruto
+  // 1. Obtém vídeo bruto (local do MoneyPrinterTurbo ou download de URL)
   const rawUrl = product.video_raw_url;
   if (!rawUrl) throw new Error(`Produto [${product.id}] sem video_raw_url`);
-  log.info(`Baixando vídeo bruto [${product.id}]`);
-  await downloadFile(rawUrl, rawPath);
+
+  if (rawUrl.startsWith('/') && fs.existsSync(rawUrl)) {
+    // Arquivo local gerado pelo MoneyPrinterTurbo — copia em vez de baixar
+    log.info(`Vídeo local MoneyPrinterTurbo [${product.id}]`);
+    fs.copyFileSync(rawUrl, rawPath);
+  } else {
+    log.info(`Baixando vídeo bruto [${product.id}]`);
+    await downloadFile(rawUrl, rawPath);
+  }
 
   // 2. Gera caption IA + narração com voz clonada (em paralelo)
   const narrationPath = path.join(OUTPUT_DIR, `product_${product.id}_narr.wav`);
