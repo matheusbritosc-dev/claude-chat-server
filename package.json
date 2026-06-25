@@ -13,7 +13,11 @@
     "run:publish": "node -e \"require('dotenv').config(); const {run}=require('./src/instagram/publisher'); run().then(console.log).catch(console.error)\"",
     "run:respond": "node -e \"require('dotenv').config(); const {run}=require('./src/instagram/responder'); run().then(console.log).catch(console.error)\"",
     "migrate": "node -e \"require('dotenv').config(); const {migrate,close}=require('./src/db/database'); migrate().then(close)\"",
-    "test": "node --test src/**/*.test.js 2>/dev/null || echo 'Sem testes configurados'"
+    "test": "node --test src/**/*.test.js 2>/dev/null || echo 'Sem testes configurados'",
+    "setup:tts": "pip install edge-tts && edge-tts --list-voices | grep pt-BR",
+    "test:tts": "node -e \"require('dotenv').config(); const {isEdgeTtsAvailable}=require('./src/editor/tts'); isEdgeTtsAvailable().then(v=>console.log('edge-tts disponível:', v))\"",
+    "test:caption": "node -e \"require('dotenv').config(); const {generateCaption}=require('./src/editor/captioner'); generateCaption({id:1,name:'Fone Bluetooth',price_original:200,price_discount:99,commission_pct:12,short_desc:'Som incrível'}).then(r=>console.log(r.caption))\"",
+    "test:pexels": "node -e \"require('dotenv').config(); const {findBrollVideo}=require('./src/video/pexels'); findBrollVideo('headphones').then(r=>console.log(r))\""
   },
   "keywords": ["shopee", "instagram", "afiliados", "automation", "higgsfield"],
   "author": "",
@@ -24,6 +28,9 @@
     "form-data": "^4.0.0",
     "node-telegram-bot-api": "^0.67.0",
     "pg": "^8.12.0"
+  },
+  "optionalDependencies": {
+    "edge-tts": "pip:edge-tts"
   },
   "engines": {
     "node": ">=20.0.0"

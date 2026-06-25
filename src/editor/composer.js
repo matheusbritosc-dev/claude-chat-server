@@ -3,12 +3,18 @@
 /**
  * MÓDULO 3 — Video Editor / Post Composer
  *
- * Para cada produto com status 'video_ready':
- *  a) Baixa o vídeo bruto (Higgsfield)
- *  b) Aplica overlay de texto, watermark e música via ffmpeg
- *  c) Formata 9:16 (1080×1920) Reels ou 1:1 feed, máx 30s
- *  d) Salva video_local_path (disco) e video_public_url (URL para Instagram)
- *  e) Gera caption automática e salva em products_queue.caption
+ * Integra técnicas do MoneyPrinterTurbo:
+ *  - Narração em voz pt-BR via Edge TTS (gratuito)
+ *  - Captions persuasivos gerados por IA (Claude Haiku)
+ *  - B-roll do Pexels quando produto não tem imagem
+ *  - ffmpeg para composição final: overlay de texto, watermark, música, voz
+ *
+ * Fluxo por produto:
+ *  1. Baixa vídeo bruto (Higgsfield ou B-roll)
+ *  2. Gera narração TTS (se edge-tts disponível)
+ *  3. Gera caption com IA (se ANTHROPIC_API_KEY configurado)
+ *  4. Compõe vídeo final com ffmpeg
+ *  5. Salva video_local_path, video_public_url e caption no banco
  */
 
 const { execFile } = require('child_process');
@@ -16,7 +22,10 @@ const fs   = require('fs');
 const path = require('path');
 const https = require('https');
 const http  = require('http');
-const { query } = require('../db/database');
+
+const { generateCaption, aiNarration } = require('./captioner');
+const { generateTTS, getAudioDuration } = require('./tts');
+const { query }  = require('../db/database');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('editor');
@@ -25,9 +34,7 @@ const FORMAT         = process.env.VIDEO_FORMAT      || 'reels';
 const MAX_DURATION   = parseInt(process.env.VIDEO_DURATION_MAX || '30');
 const WATERMARK_PATH = process.env.WATERMARK_PATH    || path.join(__dirname, '../../assets/logo.png');
 const MUSIC_PATH     = process.env.MUSIC_PATH        || path.join(__dirname, '../../assets/music/bg.mp3');
-const HASHTAGS       = process.env.AFFILIATE_HASHTAGS || '#shopee #oferta #promocao #comprinhas #lojaonline';
-const CTA            = process.env.AFFILIATE_CTA      || '🔗 Link na bio!';
-const PUBLIC_BASE    = process.env.PUBLIC_BASE_URL    || 'http://localhost:3457';
+const PUBLIC_BASE    = (process.env.PUBLIC_BASE_URL  || 'http://localhost:3457').replace(/\/$/, '');
 const OUTPUT_DIR     = path.join(__dirname, '../../tmp/videos');
 
 const DIMENSIONS = {
@@ -44,12 +51,11 @@ function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     function doGet(u) {
       const lib = u.startsWith('https') ? https : http;
-      lib.get(u, (res) => {
-        // Segue redirect
+      lib.get(u, { headers: { 'User-Agent': 'ShopeeAutomation/1.0' } }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           return doGet(res.headers.location);
         }
-        if (res.statusCode >= 400) return reject(new Error(`Download falhou HTTP ${res.statusCode}`));
+        if (res.statusCode >= 400) return reject(new Error(`Download HTTP ${res.statusCode}`));
         const file = fs.createWriteStream(dest);
         res.pipe(file);
         file.on('finish', () => { file.close(); resolve(dest); });
@@ -63,9 +69,9 @@ function downloadFile(url, dest) {
 
 function ffmpeg(args) {
   return new Promise((resolve, reject) => {
-    execFile('ffmpeg', ['-y', ...args], { timeout: 180000 }, (err, stdout, stderr) => {
+    execFile('ffmpeg', ['-y', ...args], { timeout: 240000 }, (err, stdout, stderr) => {
       if (err) {
-        log.error('ffmpeg erro', { stderr: stderr.substring(0, 500) });
+        log.error('ffmpeg erro', { stderr: stderr?.substring(0, 500) });
         return reject(new Error(`ffmpeg: ${err.message}`));
       }
       resolve({ stdout, stderr });
@@ -73,87 +79,91 @@ function ffmpeg(args) {
   });
 }
 
-// ─── Legenda automática ───────────────────────────────────────────────────────
-
 function formatBRL(v) {
   return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function buildCaption(product) {
-  const discount = product.price_original > 0
-    ? Math.round((1 - product.price_discount / product.price_original) * 100)
-    : 0;
+// ─── Composição de vídeo ──────────────────────────────────────────────────────
 
-  return [
-    `🛍️ ${product.name}`,
-    '',
-    discount >= 5
-      ? `✂️ De ${formatBRL(product.price_original)} por apenas ${formatBRL(product.price_discount)} — ${discount}% OFF!`
-      : `💰 Por apenas ${formatBRL(product.price_discount)}`,
-    '',
-    CTA,
-    '',
-    product.short_desc ? `📦 ${product.short_desc.substring(0, 150)}` : '',
-    '',
-    HASHTAGS,
-  ].filter(l => l !== undefined).join('\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-
-// ─── ffmpeg composition ───────────────────────────────────────────────────────
-
-async function compose(product, rawVideoPath) {
+async function compose({ product, rawVideoPath, ttsPath }) {
   const { w, h } = DIMENSIONS[FORMAT] || DIMENSIONS.reels;
   const filename   = `product_${product.id}_final.mp4`;
   const outputPath = path.join(OUTPUT_DIR, filename);
   const tmpPath    = path.join(OUTPUT_DIR, `product_${product.id}_tmp.mp4`);
 
-  const priceText   = product.price_discount > 0
+  const priceText = product.price_discount > 0
     ? `DE ${formatBRL(product.price_original)} POR ${formatBRL(product.price_discount)}`
-    : formatBRL(product.price_original);
-  const titleText   = product.name.substring(0, 45).toUpperCase();
+    : formatBRL(product.price_discount || product.price_original);
+  const titleText = product.name.substring(0, 42).toUpperCase().replace(/[':]/g, ' ');
+  const discount  = product.price_original > 0
+    ? Math.round((1 - product.price_discount / product.price_original) * 100)
+    : 0;
 
-  const hasWatermark = fileExists(WATERMARK_PATH);
-  const hasMusic     = fileExists(MUSIC_PATH);
-
-  // Filtro de escala base
+  // Filtro base: resize + pad + gradiente + texto
   const baseVf = [
     `scale=${w}:${h}:force_original_aspect_ratio=decrease`,
     `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black`,
     `setsar=1`,
-    // Gradiente escuro na base para legibilidade do texto
-    `drawbox=x=0:y=ih*0.65:w=iw:h=ih*0.4:color=black@0.6:t=fill`,
-    // Nome do produto
-    `drawtext=text='${titleText.replace(/[':]/g, ' ')}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h*0.70:shadowcolor=black@0.8:shadowx=2:shadowy=2`,
-    // Preço
-    `drawtext=text='${priceText.replace(/[':]/g, ' ')}':fontsize=40:fontcolor=yellow:x=(w-text_w)/2:y=h*0.81:shadowcolor=black@0.8:shadowx=2:shadowy=2`,
-    // CTA
-    `drawtext=text='VER OFERTA NA BIO':fontsize=34:fontcolor=white:x=(w-text_w)/2:y=h*0.90:box=1:boxcolor=red@0.85:boxborderw=14`,
+    `drawbox=x=0:y=ih*0.62:w=iw:h=ih*0.42:color=black@0.65:t=fill`,
+    `drawtext=text='${titleText}':fontsize=46:fontcolor=white:x=(w-text_w)/2:y=h*0.66:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+    `drawtext=text='${priceText}':fontsize=40:fontcolor=yellow:x=(w-text_w)/2:y=h*0.78:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+    discount >= 5
+      ? `drawtext=text='${discount}% OFF':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=h*0.87:box=1:boxcolor=red@0.85:boxborderw=12`
+      : `drawtext=text='VER NA BIO':fontsize=34:fontcolor=white:x=(w-text_w)/2:y=h*0.87:box=1:boxcolor=red@0.85:boxborderw=14`,
   ].join(',');
 
+  const hasWatermark = fileExists(WATERMARK_PATH);
+  const hasMusic     = fileExists(MUSIC_PATH);
+  const hasTTS       = ttsPath && fileExists(ttsPath);
+
+  // Determina duração do vídeo final
+  let targetDuration = MAX_DURATION;
+  if (hasTTS) {
+    const ttsDur = await getAudioDuration(ttsPath);
+    if (ttsDur) targetDuration = Math.min(Math.ceil(ttsDur) + 2, MAX_DURATION);
+  }
+
+  // Monta inputs ffmpeg
   const args = ['-i', rawVideoPath];
+  let inputIdx = 1;
+  const watermarkIdx = hasWatermark ? inputIdx++ : null;
+  const musicIdx     = hasMusic     ? inputIdx++ : null;
+  const ttsIdx       = hasTTS       ? inputIdx++ : null;
+
   if (hasWatermark) args.push('-i', WATERMARK_PATH);
   if (hasMusic)     args.push('-stream_loop', '-1', '-i', MUSIC_PATH);
+  if (hasTTS)       args.push('-i', ttsPath);
 
+  // Filtro complexo quando há watermark
   if (hasWatermark) {
     args.push(
       '-filter_complex',
-      `[0:v]${baseVf}[vbase];[vbase][1:v]overlay=W-w-16:H-h-16[vout]`,
+      `[0:v]${baseVf}[vbase];[vbase][${watermarkIdx}:v]overlay=W-w-16:H-h-16[vout]`,
       '-map', '[vout]',
     );
   } else {
     args.push('-vf', baseVf);
   }
 
-  if (hasMusic) {
-    const audioIdx = hasWatermark ? 2 : 1;
+  // Mix de áudio: TTS + música de fundo
+  if (hasTTS && hasMusic) {
     args.push(
-      '-map', `${audioIdx}:a`,
-      '-af', `volume=0.25,afade=t=out:st=${Math.max(MAX_DURATION - 2, 1)}:d=2`,
+      '-filter_complex',
+      `[${musicIdx}:a]volume=0.15,afade=t=out:st=${Math.max(targetDuration - 2, 1)}:d=2[music];` +
+      `[${ttsIdx}:a]volume=1.0[speech];[music][speech]amix=inputs=2:duration=longest[aout]`,
+      '-map', '[aout]',
+    );
+  } else if (hasTTS) {
+    args.push('-map', `${ttsIdx}:a`);
+  } else if (hasMusic) {
+    args.push(
+      '-map', `${musicIdx}:a`,
+      '-af', `volume=0.25,afade=t=out:st=${Math.max(targetDuration - 2, 1)}:d=2`,
     );
   }
 
   args.push(
-    '-t',        String(MAX_DURATION),
+    '-t',        String(targetDuration),
     '-c:v',      'libx264',
     '-preset',   'fast',
     '-crf',      '23',
@@ -164,29 +174,52 @@ async function compose(product, rawVideoPath) {
     tmpPath,
   );
 
-  log.info(`Renderizando [${product.id}] ${FORMAT} ${w}×${h}`);
+  log.info(`Renderizando [${product.id}] ${FORMAT} ${w}×${h} ${targetDuration}s` +
+    (hasTTS ? ' +TTS' : '') + (hasMusic ? ' +música' : '') + (hasWatermark ? ' +logo' : ''));
+
   await ffmpeg(args);
   fs.renameSync(tmpPath, outputPath);
-  log.info(`Vídeo composto: ${filename}`);
+  log.info(`Vídeo pronto: ${filename}`);
 
-  const publicUrl = `${PUBLIC_BASE}/videos/${filename}`;
-  return { localPath: outputPath, publicUrl };
+  return {
+    localPath: outputPath,
+    publicUrl: `${PUBLIC_BASE}/videos/${filename}`,
+  };
 }
 
-// ─── Pipeline principal ───────────────────────────────────────────────────────
+// ─── Pipeline por produto ─────────────────────────────────────────────────────
 
 async function processProduct(product) {
   ensureDir(OUTPUT_DIR);
 
   const rawPath = path.join(OUTPUT_DIR, `product_${product.id}_raw.mp4`);
-  const rawUrl  = product.video_raw_url;
+  const ttsPath = path.join(OUTPUT_DIR, `product_${product.id}_tts.mp3`);
 
+  // 1. Baixa vídeo bruto
+  const rawUrl = product.video_raw_url;
+  if (!rawUrl) throw new Error(`Produto [${product.id}] sem video_raw_url`);
   log.info(`Baixando vídeo bruto [${product.id}]`);
   await downloadFile(rawUrl, rawPath);
 
-  const { localPath, publicUrl } = await compose(product, rawPath);
-  const caption = buildCaption(product);
+  // 2. Gera narração TTS (em paralelo com caption)
+  let generatedTtsPath = null;
+  const [{ caption }, narrationText] = await Promise.all([
+    generateCaption(product),
+    aiNarration(product).catch(() => null),
+  ]);
 
+  if (narrationText) {
+    generatedTtsPath = await generateTTS({ text: narrationText, outputPath: ttsPath });
+  }
+
+  // 3. Compõe vídeo final
+  const { localPath, publicUrl } = await compose({
+    product,
+    rawVideoPath: rawPath,
+    ttsPath: generatedTtsPath,
+  });
+
+  // 4. Persiste no banco
   await query(
     `UPDATE products_queue
         SET status           = 'composed',
@@ -198,8 +231,10 @@ async function processProduct(product) {
     [localPath, publicUrl, caption, product.id]
   );
 
-  fs.unlink(rawPath, () => {});
-  log.info(`Produto [${product.id}] composto. URL pública: ${publicUrl}`);
+  // 5. Limpeza
+  [rawPath, ttsPath].forEach(p => fs.unlink(p, () => {}));
+
+  log.info(`Produto [${product.id}] composto. URL: ${publicUrl}`);
   return { localPath, publicUrl, caption };
 }
 
@@ -225,4 +260,4 @@ async function run() {
   log.info('Composer concluído.');
 }
 
-module.exports = { run, processProduct, buildCaption };
+module.exports = { run, processProduct };

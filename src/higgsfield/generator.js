@@ -1,21 +1,21 @@
 'use strict';
 
 /**
- * MÓDULO 2 — Higgsfield Video Generator
+ * MÓDULO 2 — Video Generator
  *
- * Para cada produto 'pending':
- *  1. Importa a imagem do produto via URL
- *  2. Dispara geração image-to-video com preset e-commerce
- *  3. Recebe resultado via webhook OU polling (fallback)
- *  4. Salva video_raw_url em products_queue
+ * Provedor primário: Higgsfield AI (image-to-video cinematográfico)
+ * Fallback 1:       muapi.ai (60+ modelos: Kling, Veo, etc.)
+ * Fallback 2:       Pexels B-roll (quando produto não tem imagem)
  *
- * Em HIGGSFIELD_TEST_MODE=true usa vídeo de demonstração publicamente disponível.
+ * Em HIGGSFIELD_TEST_MODE=true usa vídeo de demonstração.
  */
 
 const https = require('https');
-const { query } = require('../db/database');
-const { withRetry, sleep } = require('../utils/retry');
-const { createLogger } = require('../utils/logger');
+const { query }             = require('../db/database');
+const { withRetry, sleep }  = require('../utils/retry');
+const { createLogger }      = require('../utils/logger');
+const muapi                 = require('../video/muapi');
+const { findBrollVideo, downloadBroll, getThumbnailUrl } = require('../video/pexels');
 
 const log = createLogger('higgsfield');
 
@@ -165,39 +165,92 @@ async function processProduct(product) {
     return;
   }
 
+  // Garante que temos uma image_url — usa Pexels se necessário
+  let imageUrl = product.image_url;
+  if (!imageUrl) {
+    log.info(`[${product.id}] Sem imagem — buscando thumbnail no Pexels`);
+    imageUrl = await getThumbnailUrl(product.name).catch(() => null);
+    if (imageUrl) {
+      await query(`UPDATE products_queue SET image_url=$1 WHERE id=$2`, [imageUrl, product.id]);
+    }
+  }
+
+  if (!imageUrl) {
+    // Sem imagem de jeito nenhum — tenta B-roll direto como vídeo raw
+    log.info(`[${product.id}] Sem imagem — usando B-roll Pexels como vídeo base`);
+    const broll = await findBrollVideo(product.name).catch(() => null);
+    if (broll?.url) {
+      await markVideoReady(product.id, broll.url, 'pexels-broll');
+      return;
+    }
+    await markFailed(product.id, 'Sem imagem e sem B-roll disponível');
+    return;
+  }
+
+  // Tenta Higgsfield (provedor primário)
   let lastError;
   for (const preset of MOTION_PRESETS) {
     try {
-      const mediaId = await importImageUrl(product.image_url);
+      const mediaId = await importImageUrl(imageUrl);
       const jobId   = await generateVideo({ mediaId, productName: product.name, preset });
 
       if (PUBLIC_BASE) {
         await markAwaitingWebhook(product.id, jobId);
         log.info(`Aguardando webhook para job ${jobId}`);
       } else {
-        log.warn('PUBLIC_BASE_URL não configurado — usando polling (pode demorar até 10 min)');
+        log.warn('PUBLIC_BASE_URL não configurado — usando polling');
         const videoUrl = await pollJobStatus(jobId);
         await markVideoReady(product.id, videoUrl, jobId);
       }
       return;
     } catch (err) {
       lastError = err;
-      log.warn(`Preset ${preset} falhou`, { error: err.message });
+      log.warn(`Higgsfield preset ${preset} falhou`, { error: err.message });
     }
   }
-  await markFailed(product.id, lastError?.message || 'Todos os presets falharam');
+
+  // Fallback: muapi.ai
+  if (process.env.MUAPI_API_KEY) {
+    log.info(`[${product.id}] Higgsfield esgotado — tentando muapi.ai (${process.env.MUAPI_MODEL || 'kling'})`);
+    try {
+      const videoUrl = await muapi.run({
+        imageUrl,
+        prompt: `Cinematic e-commerce product showcase: ${product.name.substring(0, 60)}, professional studio lighting, 9:16 vertical`,
+      });
+      await markVideoReady(product.id, videoUrl, 'muapi');
+      return;
+    } catch (err) {
+      log.warn('muapi.ai também falhou', { error: err.message });
+    }
+  }
+
+  // Último recurso: B-roll Pexels como vídeo base
+  if (process.env.PEXELS_API_KEY || process.env.PIXABAY_API_KEY) {
+    log.info(`[${product.id}] Usando B-roll Pexels como última alternativa`);
+    try {
+      const broll = await findBrollVideo(product.name);
+      if (broll?.url) {
+        await markVideoReady(product.id, broll.url, 'pexels-fallback');
+        return;
+      }
+    } catch (err) {
+      log.warn('B-roll também falhou', { error: err.message });
+    }
+  }
+
+  await markFailed(product.id, lastError?.message || 'Todos os provedores falharam');
   throw lastError;
 }
 
 async function run() {
-  log.info(TEST_MODE ? 'Higgsfield generator [MODO TESTE]' : 'Iniciando Higgsfield generator...');
+  log.info(TEST_MODE ? 'Generator [MODO TESTE]' : 'Iniciando generator (Higgsfield + fallbacks)...');
 
-  if (!TEST_MODE && !API_KEY) {
-    throw new Error('HIGGSFIELD_API_KEY não configurado. Use HIGGSFIELD_TEST_MODE=true para testes.');
+  if (!TEST_MODE && !API_KEY && !process.env.MUAPI_API_KEY) {
+    throw new Error('Nenhum provedor de vídeo configurado. Configure HIGGSFIELD_API_KEY, MUAPI_API_KEY ou use HIGGSFIELD_TEST_MODE=true');
   }
 
   const result = await query(
-    `SELECT * FROM products_queue WHERE status='pending' AND image_url IS NOT NULL ORDER BY created_at ASC LIMIT 5`
+    `SELECT * FROM products_queue WHERE status='pending' ORDER BY created_at ASC LIMIT 5`
   );
 
   log.info(`Produtos na fila: ${result.rows.length}`);
