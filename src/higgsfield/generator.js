@@ -3,156 +3,139 @@
 /**
  * MÓDULO 2 — Higgsfield Video Generator
  *
- * Para cada produto 'pending' na fila:
- *  1. Faz upload da imagem do produto
- *  2. Dispara geração de vídeo (image-to-video) com motion preset e-commerce
- *  3. Recebe resultado via webhook assíncrono
- *  4. Persiste video_url em products_queue
+ * Para cada produto 'pending':
+ *  1. Importa a imagem do produto via URL
+ *  2. Dispara geração image-to-video com preset e-commerce
+ *  3. Recebe resultado via webhook OU polling (fallback)
+ *  4. Salva video_raw_url em products_queue
+ *
+ * Em HIGGSFIELD_TEST_MODE=true usa vídeo de demonstração publicamente disponível.
  */
 
 const https = require('https');
-const http  = require('http');
-const { URL } = require('url');
 const { query } = require('../db/database');
-const { withRetry } = require('../utils/retry');
+const { withRetry, sleep } = require('../utils/retry');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('higgsfield');
 
-const API_KEY         = process.env.HIGGSFIELD_API_KEY;
-const WEBHOOK_SECRET  = process.env.HIGGSFIELD_WEBHOOK_SECRET;
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || '';
-const WEBHOOK_PATH    = process.env.WEBHOOK_PATH || '/webhook/higgsfield';
+const TEST_MODE      = process.env.HIGGSFIELD_TEST_MODE === 'true';
+const API_KEY        = process.env.HIGGSFIELD_API_KEY;
+const WEBHOOK_SECRET = process.env.HIGGSFIELD_WEBHOOK_SECRET;
+const PUBLIC_BASE    = process.env.PUBLIC_BASE_URL || '';
+const WEBHOOK_PATH   = process.env.WEBHOOK_PATH || '/webhook/higgsfield';
 
-// Presets recomendados para e-commerce (tentados em ordem)
+// Vídeo MP4 royalty-free para modo teste
+const TEST_VIDEO_URL = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+
 const MOTION_PRESETS = ['dolly-in', 'zoom-out', 'product-reveal', 'ken-burns'];
 
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
+// ─── HTTP helper ──────────────────────────────────────────────────────────────
 
-function request(urlStr, options = {}, body = null) {
+function apiRequest(endpoint, method = 'GET', body = null) {
+  const url = `https://api.higgsfield.ai${endpoint}`;
   return new Promise((resolve, reject) => {
-    const parsed = new URL(urlStr);
-    const lib = parsed.protocol === 'https:' ? https : http;
-
     const opts = {
-      hostname: parsed.hostname,
-      port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-      path:     parsed.pathname + parsed.search,
-      method:   options.method || 'GET',
-      headers:  options.headers || {},
+      method,
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
     };
-
-    const req = lib.request(opts, (res) => {
+    const req = https.request(url, opts, (res) => {
       let data = '';
-      res.on('data', chunk => { data += chunk; });
+      res.on('data', c => { data += c; });
       res.on('end', () => {
-        if (res.statusCode >= 400) {
-          return reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 300)}`));
-        }
-        try { resolve(JSON.parse(data)); }
-        catch { resolve(data); }
+        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 300)}`));
+        try { resolve(JSON.parse(data)); } catch { resolve(data); }
       });
     });
-
     req.on('error', reject);
     req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')); });
-
-    if (body) {
-      const payload = typeof body === 'string' ? body : JSON.stringify(body);
-      req.write(payload);
-    }
+    if (body) req.write(JSON.stringify(body));
     req.end();
   });
 }
 
 function higgsPost(endpoint, body) {
-  const url = `https://api.higgsfield.ai${endpoint}`;
-  return withRetry(() => request(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-  }, body), { maxAttempts: 3, baseDelayMs: 2000, context: `higgsfield:${endpoint}` });
+  return withRetry(() => apiRequest(endpoint, 'POST', body), {
+    maxAttempts: 3, baseDelayMs: 2000, context: `higgsfield:${endpoint}`,
+  });
 }
-
 function higgsGet(endpoint) {
-  const url = `https://api.higgsfield.ai${endpoint}`;
-  return withRetry(() => request(url, {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
-  }), { maxAttempts: 3, baseDelayMs: 2000, context: `higgsfield:GET${endpoint}` });
+  return withRetry(() => apiRequest(endpoint, 'GET'), {
+    maxAttempts: 3, baseDelayMs: 2000, context: `higgsfield:GET${endpoint}`,
+  });
 }
 
-// ─── Upload de imagem ─────────────────────────────────────────────────────────
+// ─── API calls ────────────────────────────────────────────────────────────────
 
 async function importImageUrl(imageUrl) {
-  log.debug('Importando imagem', { url: imageUrl.substring(0, 80) });
   const resp = await higgsPost('/v1/media/import', { url: imageUrl });
   const mediaId = resp?.media_id || resp?.id;
   if (!mediaId) throw new Error(`Falha ao importar imagem: ${JSON.stringify(resp)}`);
   return mediaId;
 }
 
-// ─── Geração de vídeo ─────────────────────────────────────────────────────────
-
 async function generateVideo({ mediaId, productName, preset }) {
-  log.info(`Gerando vídeo — preset: ${preset}`, { productName: productName.substring(0, 40) });
-
   const body = {
-    model:   'DoP',
-    prompt:  `Professional e-commerce product showcase of ${productName.substring(0, 80)}, cinematic lighting, clean background, ${preset} camera motion`,
-    medias:  [{ type: 'image', value: mediaId }],
-    duration: 5,
+    model:        'DoP',
+    prompt:       `Cinematic e-commerce product showcase: ${productName.substring(0, 80)}, professional studio lighting, clean white background, ${preset} camera motion, high quality`,
+    medias:       [{ type: 'image', value: mediaId }],
+    duration:     5,
     aspect_ratio: '9:16',
-    webhook: {
-      url:    `${PUBLIC_BASE_URL}${WEBHOOK_PATH}`,
-      secret: WEBHOOK_SECRET,
-    },
+    ...(PUBLIC_BASE ? {
+      webhook: { url: `${PUBLIC_BASE}${WEBHOOK_PATH}`, secret: WEBHOOK_SECRET },
+    } : {}),
   };
-
   const resp = await higgsPost('/v1/generate/video', body);
   const jobId = resp?.job_id || resp?.id;
-  if (!jobId) throw new Error(`Sem job_id na resposta: ${JSON.stringify(resp)}`);
-  log.info('Job criado', { jobId, preset });
+  if (!jobId) throw new Error(`Sem job_id: ${JSON.stringify(resp)}`);
   return jobId;
 }
 
-// ─── Status polling (fallback quando webhook não chega) ──────────────────────
-
-async function pollJobStatus(jobId, { maxWaitMs = 300000, intervalMs = 10000 } = {}) {
+async function pollJobStatus(jobId, { maxWaitMs = 600000, intervalMs = 15000 } = {}) {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     const resp = await higgsGet(`/v1/jobs/${jobId}`);
     const status = resp?.status;
-    log.debug(`Job ${jobId} status: ${status}`);
-
+    log.debug(`Job ${jobId}: ${status}`);
     if (status === 'completed' || status === 'success') {
-      const videoUrl = resp?.output?.url || resp?.video_url;
-      if (!videoUrl) throw new Error('Job concluído mas sem video_url');
-      return videoUrl;
+      const url = resp?.output?.url || resp?.video_url;
+      if (!url) throw new Error('Job concluído mas sem URL de vídeo');
+      return url;
     }
     if (status === 'failed' || status === 'error') {
       throw new Error(`Job ${jobId} falhou: ${resp?.error || 'desconhecido'}`);
     }
-
-    await new Promise(r => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
   throw new Error(`Timeout aguardando job ${jobId}`);
 }
 
 // ─── Persistência ─────────────────────────────────────────────────────────────
 
-async function updateProductVideo(productId, videoUrl, jobId) {
+async function markVideoReady(productId, rawVideoUrl, jobId) {
   await query(
     `UPDATE products_queue
-        SET video_url   = $1,
-            status      = 'video_ready',
-            updated_at  = NOW()
-      WHERE id = $2`,
-    [videoUrl, productId]
+        SET video_raw_url     = $1,
+            higgsfield_job_id = $2,
+            status            = 'video_ready',
+            updated_at        = NOW()
+      WHERE id = $3`,
+    [rawVideoUrl, jobId || null, productId]
   );
-  log.info(`Produto ${productId} — vídeo salvo`, { jobId });
+}
+
+async function markAwaitingWebhook(productId, jobId) {
+  await query(
+    `UPDATE products_queue
+        SET higgsfield_job_id = $1,
+            status            = 'awaiting_webhook',
+            updated_at        = NOW()
+      WHERE id = $2`,
+    [jobId, productId]
+  );
 }
 
 async function markFailed(productId, errorMsg) {
@@ -167,16 +150,20 @@ async function markFailed(productId, errorMsg) {
   );
 }
 
-// ─── Pipeline principal ───────────────────────────────────────────────────────
+// ─── Processamento de produto ─────────────────────────────────────────────────
 
 async function processProduct(product) {
-  log.info(`Processando produto [${product.id}]: ${product.name.substring(0, 50)}`);
+  log.info(`Gerando vídeo [${product.id}]: ${product.name.substring(0, 50)}`);
 
-  // Marca como em processamento
-  await query(
-    `UPDATE products_queue SET status = 'generating', updated_at = NOW() WHERE id = $1`,
-    [product.id]
-  );
+  await query(`UPDATE products_queue SET status='generating', updated_at=NOW() WHERE id=$1`, [product.id]);
+
+  // Modo teste: pula a API e usa vídeo de demonstração
+  if (TEST_MODE) {
+    await sleep(1000);
+    await markVideoReady(product.id, TEST_VIDEO_URL, 'test-job');
+    log.info(`[TESTE] Vídeo demo atribuído ao produto [${product.id}]`);
+    return;
+  }
 
   let lastError;
   for (const preset of MOTION_PRESETS) {
@@ -184,18 +171,13 @@ async function processProduct(product) {
       const mediaId = await importImageUrl(product.image_url);
       const jobId   = await generateVideo({ mediaId, productName: product.name, preset });
 
-      // Tenta via webhook (async); se PUBLIC_BASE_URL não configurado, faz polling
-      if (!PUBLIC_BASE_URL) {
-        log.warn('PUBLIC_BASE_URL não configurado — usando polling');
-        const videoUrl = await pollJobStatus(jobId);
-        await updateProductVideo(product.id, videoUrl, jobId);
-      } else {
-        // Salva jobId para o webhook associar depois
-        await query(
-          `UPDATE products_queue SET status = 'awaiting_webhook', error_msg = $1, updated_at = NOW() WHERE id = $2`,
-          [jobId, product.id]
-        );
+      if (PUBLIC_BASE) {
+        await markAwaitingWebhook(product.id, jobId);
         log.info(`Aguardando webhook para job ${jobId}`);
+      } else {
+        log.warn('PUBLIC_BASE_URL não configurado — usando polling (pode demorar até 10 min)');
+        const videoUrl = await pollJobStatus(jobId);
+        await markVideoReady(product.id, videoUrl, jobId);
       }
       return;
     } catch (err) {
@@ -203,103 +185,64 @@ async function processProduct(product) {
       log.warn(`Preset ${preset} falhou`, { error: err.message });
     }
   }
-
   await markFailed(product.id, lastError?.message || 'Todos os presets falharam');
   throw lastError;
 }
 
 async function run() {
-  log.info('Iniciando Higgsfield generator...');
+  log.info(TEST_MODE ? 'Higgsfield generator [MODO TESTE]' : 'Iniciando Higgsfield generator...');
 
-  if (!API_KEY) {
-    throw new Error('HIGGSFIELD_API_KEY não configurado');
+  if (!TEST_MODE && !API_KEY) {
+    throw new Error('HIGGSFIELD_API_KEY não configurado. Use HIGGSFIELD_TEST_MODE=true para testes.');
   }
 
   const result = await query(
-    `SELECT * FROM products_queue
-      WHERE status = 'pending'
-        AND image_url IS NOT NULL
-      ORDER BY created_at ASC
-      LIMIT 5`
+    `SELECT * FROM products_queue WHERE status='pending' AND image_url IS NOT NULL ORDER BY created_at ASC LIMIT 5`
   );
 
-  const products = result.rows;
-  log.info(`Produtos na fila para gerar vídeo: ${products.length}`);
-
-  for (const product of products) {
-    try {
-      await processProduct(product);
-    } catch (err) {
-      log.error(`Falha no produto [${product.id}]`, { error: err.message });
-    }
+  log.info(`Produtos na fila: ${result.rows.length}`);
+  for (const p of result.rows) {
+    try { await processProduct(p); }
+    catch (err) { log.error(`Falha [${p.id}]`, { error: err.message }); }
   }
-
   log.info('Generator concluído.');
 }
 
 // ─── Handler de webhook ───────────────────────────────────────────────────────
 
-async function handleWebhook(payload, signature) {
-  // Valida assinatura HMAC
+async function handleWebhook(rawPayload, signature) {
   if (WEBHOOK_SECRET && signature) {
     const crypto = require('crypto');
-    const expected = crypto
-      .createHmac('sha256', WEBHOOK_SECRET)
-      .update(typeof payload === 'string' ? payload : JSON.stringify(payload))
+    const expected = crypto.createHmac('sha256', WEBHOOK_SECRET)
+      .update(typeof rawPayload === 'string' ? rawPayload : JSON.stringify(rawPayload))
       .digest('hex');
-    if (!signature.includes(expected)) {
-      throw new Error('Assinatura de webhook inválida');
-    }
+    if (!signature.includes(expected)) throw new Error('Assinatura de webhook inválida');
   }
 
-  const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
-  const jobId    = data.job_id || data.id;
-  const status   = data.status;
+  const data   = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+  const jobId  = data.job_id || data.id;
+  const status = data.status;
   const videoUrl = data.output?.url || data.video_url;
 
-  log.info(`Webhook recebido`, { jobId, status });
-
+  log.info('Webhook Higgsfield', { jobId, status });
   if (!jobId) return { ignored: true };
 
-  // error_msg está sendo usado temporariamente para guardar o jobId
   const res = await query(
-    `SELECT id FROM products_queue WHERE error_msg = $1 AND status = 'awaiting_webhook'`,
+    `SELECT id FROM products_queue WHERE higgsfield_job_id=$1 AND status='awaiting_webhook'`,
     [jobId]
   );
-
-  if (!res.rows.length) {
-    log.warn(`Nenhum produto aguardando job ${jobId}`);
-    return { ignored: true };
-  }
+  if (!res.rows.length) { log.warn(`Job ${jobId} sem produto associado`); return { ignored: true }; }
 
   const productId = res.rows[0].id;
 
   if ((status === 'completed' || status === 'success') && videoUrl) {
-    await query(
-      `UPDATE products_queue
-          SET video_url  = $1,
-              status     = 'video_ready',
-              error_msg  = NULL,
-              updated_at = NOW()
-        WHERE id = $2`,
-      [videoUrl, productId]
-    );
-    log.info(`Vídeo pronto para produto [${productId}]`);
+    await markVideoReady(productId, videoUrl, jobId);
     return { processed: true, productId };
   }
-
   if (status === 'failed' || status === 'error') {
-    await query(
-      `UPDATE products_queue
-          SET status     = 'video_failed',
-              error_msg  = $1,
-              updated_at = NOW()
-        WHERE id = $2`,
-      [`Job ${jobId} falhou`, productId]
-    );
+    await markFailed(productId, `Job ${jobId} falhou`);
     return { failed: true, productId };
   }
-
   return { ignored: true, status };
 }
 
