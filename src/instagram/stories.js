@@ -15,65 +15,22 @@
  *  3. POST /{ig-user-id}/media_publish com creation_id
  */
 
-const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 const { execFile } = require('child_process');
 const { query }         = require('../db/database');
 const { withRetry, sleep } = require('../utils/retry');
 const { createLogger }  = require('../utils/logger');
+const meta = require('./metaClient');
 
 const log = createLogger('stories');
 
 const TEST_MODE     = process.env.META_TEST_MODE === 'true';
-const ACCESS_TOKEN  = process.env.META_ACCESS_TOKEN;
-const IG_ACCOUNT_ID = process.env.META_INSTAGRAM_ACCOUNT_ID;
+const ACCESS_TOKEN  = meta.ACCESS_TOKEN;
+const IG_ACCOUNT_ID = meta.ACCOUNT_ID;
 const PUBLIC_BASE   = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-const GRAPH_VER     = 'v21.0';
-const BASE          = `https://graph.facebook.com/${GRAPH_VER}`;
 const VIDEOS_DIR    = path.join(__dirname, '../../tmp/videos');
-
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
-
-function graphGet(endpoint, params = {}) {
-  const qs = new URLSearchParams({ access_token: ACCESS_TOKEN, ...params });
-  return new Promise((resolve, reject) => {
-    https.get(`${BASE}${endpoint}?${qs}`, (res) => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try {
-          const p = JSON.parse(data);
-          if (p.error) return reject(new Error(`Graph: ${p.error.message}`));
-          resolve(p);
-        } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
-}
-
-function graphPost(endpoint, body) {
-  const payload = JSON.stringify({ access_token: ACCESS_TOKEN, ...body });
-  return new Promise((resolve, reject) => {
-    const req = https.request(`${BASE}${endpoint}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-    }, (res) => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try {
-          const p = JSON.parse(data);
-          if (p.error) return reject(new Error(`Graph: ${p.error.message}`));
-          resolve(p);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
+const { graphGet, graphPost } = meta;
 
 // ─── Preparo de Story de imagem com ffmpeg ────────────────────────────────────
 

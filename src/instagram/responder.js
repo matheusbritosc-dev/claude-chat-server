@@ -8,17 +8,16 @@
  * Detecta intenção de compra/dúvida para responder de forma inteligente.
  */
 
-const https = require('https');
 const { query } = require('../db/database');
 const { withRetry, sleep } = require('../utils/retry');
 const { createLogger } = require('../utils/logger');
+const meta = require('./metaClient');
 
 const log = createLogger('responder');
 
-const ACCESS_TOKEN  = process.env.META_ACCESS_TOKEN;
-const IG_ACCOUNT_ID = process.env.META_INSTAGRAM_ACCOUNT_ID;
-const GRAPH_VER     = 'v21.0';
-const BASE          = `https://graph.facebook.com/${GRAPH_VER}`;
+const ACCESS_TOKEN  = meta.ACCESS_TOKEN;
+const IG_ACCOUNT_ID = meta.ACCOUNT_ID;
+const { graphGet, graphPost } = meta;
 
 // Palavras que indicam intenção de compra ou interesse
 const BUY_INTENT_KEYWORDS = [
@@ -36,50 +35,6 @@ const REPLY_TEMPLATES = [
   (link) => `Oi! Corre lá antes de acabar 🏃‍♀️💨 ${link}`,
   (link) => `Disponível aqui com desconto 🤩 ${link} 🛒`,
 ];
-
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
-
-function graphGet(endpoint, params = {}) {
-  const qs = new URLSearchParams({ access_token: ACCESS_TOKEN, ...params });
-  const url = `${BASE}${endpoint}?${qs}`;
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(`Graph: ${parsed.error.message}`));
-          resolve(parsed);
-        } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
-}
-
-function graphPost(endpoint, body) {
-  const url = `${BASE}${endpoint}`;
-  const payload = JSON.stringify({ access_token: ACCESS_TOKEN, ...body });
-  return new Promise((resolve, reject) => {
-    const req = https.request(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-    }, (res) => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(`Graph reply: ${parsed.error.message}`));
-          resolve(parsed);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
 
 // ─── Detecção de intenção ─────────────────────────────────────────────────────
 

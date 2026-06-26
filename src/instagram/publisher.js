@@ -16,70 +16,23 @@
  * Em META_TEST_MODE=true loga os dados sem publicar de verdade.
  */
 
-const https = require('https');
 const { query } = require('../db/database');
 const { withRetry, sleep } = require('../utils/retry');
 const { createLogger } = require('../utils/logger');
+const meta = require('./metaClient');
 
 const log = createLogger('instagram');
 
 const TEST_MODE     = process.env.META_TEST_MODE === 'true';
-const ACCESS_TOKEN  = process.env.META_ACCESS_TOKEN;
-const IG_ACCOUNT_ID = process.env.META_INSTAGRAM_ACCOUNT_ID;
-const GRAPH_VER     = 'v21.0';
-const BASE          = `https://graph.facebook.com/${GRAPH_VER}`;
-
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
-
-function graphGet(endpoint, params = {}) {
-  const qs  = new URLSearchParams({ access_token: ACCESS_TOKEN, ...params });
-  const url = `${BASE}${endpoint}?${qs}`;
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(`Graph API [${res.statusCode}]: ${parsed.error.message} (code ${parsed.error.code})`));
-          resolve(parsed);
-        } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
-}
-
-function graphPost(endpoint, body) {
-  const payload = JSON.stringify({ access_token: ACCESS_TOKEN, ...body });
-  return new Promise((resolve, reject) => {
-    const req = https.request(`${BASE}${endpoint}`, {
-      method:  'POST',
-      headers: {
-        'Content-Type':   'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', c => { data += c; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(`Graph API [${res.statusCode}]: ${parsed.error.message} (code ${parsed.error.code})`));
-          resolve(parsed);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
+const ACCESS_TOKEN  = meta.ACCESS_TOKEN;
+const IG_ACCOUNT_ID = meta.ACCOUNT_ID;
+const { graphGet, graphPost } = meta;
 
 // ─── Verificação de token ─────────────────────────────────────────────────────
 
 async function validateToken() {
-  const resp = await graphGet('/me', { fields: 'id,name' });
-  log.info(`Token válido — conta: ${resp.name} (${resp.id})`);
+  const resp = await meta.validateToken();
+  log.info(`Token válido — conta: ${resp.username || resp.name} (${resp.id})`);
   return resp;
 }
 
