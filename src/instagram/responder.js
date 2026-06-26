@@ -51,14 +51,20 @@ function pickReplyTemplate(link) {
 // ─── Busca comentários ────────────────────────────────────────────────────────
 
 async function fetchComments(mediaId) {
-  const resp = await withRetry(
-    () => graphGet(`/${mediaId}/comments`, {
+  try {
+    const resp = await graphGet(`/${mediaId}/comments`, {
       fields: 'id,text,username,timestamp',
       limit:  '50',
-    }),
-    { maxAttempts: 3, context: 'fetch-comments' }
-  );
-  return resp.data || [];
+    });
+    return resp.data || [];
+  } catch (err) {
+    // code 100 = permissão insuficiente ou endpoint não suportado para este token
+    if (err.message && (err.message.includes('code 100') || err.message.includes('(#100)'))) {
+      log.debug(`Sem permissão para comentários de ${mediaId} (code 100) — pulando`);
+      return [];
+    }
+    throw err;
+  }
 }
 
 // ─── Resposta a comentário ────────────────────────────────────────────────────
