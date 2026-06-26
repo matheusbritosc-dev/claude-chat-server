@@ -178,6 +178,7 @@ function sendDashboard(res) {
     <button class="secondary" onclick="run('compose')">3. Editar Vídeos</button>
     <button class="secondary" onclick="run('publish')">4. Publicar</button>
     <button class="secondary" onclick="run('respond')">5. Responder Comentários</button>
+    <button class="secondary" onclick="resetQueue()" style="background:#7f1d1d;color:#fca5a5">↺ Resetar Fila</button>
   </div>
 
   <table>
@@ -224,6 +225,19 @@ function sendDashboard(res) {
       } catch(e) {
         log.textContent += \`ERRO: \${e.message}\\n\`;
       }
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function resetQueue() {
+      if (!confirm('Resetar todos os produtos para PENDING? Isso vai regerar todos os vídeos.')) return;
+      const log = document.getElementById('log');
+      log.style.display = 'block';
+      try {
+        const r = await fetch('/api/reset', { method:'POST' });
+        const d = await r.json();
+        log.textContent += \`\\n[\${new Date().toLocaleTimeString()}] Fila resetada: \${d.reset} produtos → pending\\n\`;
+        setTimeout(load, 500);
+      } catch(e) { log.textContent += \`ERRO reset: \${e.message}\\n\`; }
       log.scrollTop = log.scrollHeight;
     }
 
@@ -344,6 +358,23 @@ async function handleRequest(req, res) {
       }
     });
     return;
+  }
+
+  // Reset da fila: POST /api/reset  (volta produtos para 'pending' para regerar)
+  if (req.method === 'POST' && req.url === '/api/reset') {
+    try {
+      const r = await query(
+        `UPDATE products_queue
+            SET status='pending', video_raw_url=NULL, video_public_url=NULL,
+                instagram_media_id=NULL, video_local_path=NULL, updated_at=NOW()
+          RETURNING id`
+      );
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, reset: r.rowCount }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, error: err.message }));
+    }
   }
 
   // Trigger manual: POST /api/run/:step
