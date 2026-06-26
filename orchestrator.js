@@ -61,12 +61,17 @@ async function getStatus() {
 
 function serveVideo(req, res) {
   const filename = path.basename(req.url.split('?')[0]);
-  // Apenas .mp4 da pasta tmp/videos — sem path traversal
-  if (!/^[\w-]+\.mp4$/.test(filename)) {
+  // Permite .mp4, .mp3, .wav — sem path traversal
+  const extMatch = filename.match(/\.(mp4|mp3|wav)$/i);
+  if (!/^[\w-]+\.(mp4|mp3|wav)$/i.test(filename)) {
     res.writeHead(403); return res.end('Forbidden');
   }
   const filePath = path.join(VIDEOS_DIR, filename);
   if (!fs.existsSync(filePath)) { res.writeHead(404); return res.end('Not Found'); }
+
+  const ext = (extMatch && extMatch[1].toLowerCase()) || 'mp4';
+  const mimeTypes = { mp4: 'video/mp4', mp3: 'audio/mpeg', wav: 'audio/wav' };
+  const contentType = mimeTypes[ext] || 'application/octet-stream';
 
   const stat = fs.statSync(filePath);
   const range = req.headers.range;
@@ -79,13 +84,13 @@ function serveVideo(req, res) {
       'Content-Range':  `bytes ${start}-${end}/${stat.size}`,
       'Accept-Ranges':  'bytes',
       'Content-Length': end - start + 1,
-      'Content-Type':   'video/mp4',
+      'Content-Type':   contentType,
     });
     fs.createReadStream(filePath, { start, end }).pipe(res);
   } else {
     res.writeHead(200, {
       'Content-Length': stat.size,
-      'Content-Type':   'video/mp4',
+      'Content-Type':   contentType,
       'Accept-Ranges':  'bytes',
     });
     fs.createReadStream(filePath).pipe(res);
