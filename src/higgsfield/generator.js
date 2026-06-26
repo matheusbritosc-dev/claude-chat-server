@@ -30,7 +30,7 @@ const PUBLIC_BASE    = process.env.PUBLIC_BASE_URL || '';
 const WEBHOOK_PATH   = process.env.WEBHOOK_PATH || '/webhook/higgsfield';
 const OUTPUT_DIR     = path.join(__dirname, '../../tmp/videos');
 
-const TEST_VIDEO_URL = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+const TEST_VIDEO_URL = 'https://www.w3schools.com/html/mov_bbb.mp4';
 const MOTION_PRESETS = ['dolly-in', 'zoom-out', 'product-reveal', 'ken-burns'];
 
 // ─── Higgsfield HTTP ──────────────────────────────────────────────────────────
