@@ -39,7 +39,14 @@ const ENABLED        = process.env.AVATAR_ENABLED !== 'false';
 
 function fileExists(p) { try { return p && fs.statSync(p).isFile(); } catch { return false; } }
 
-function apiPost(hostname, endpoint, body, apiKey) {
+function buildAuthHeaders(apiKey, authStyle) {
+  // muapi.ai usa header x-api-key; Higgsfield usa Authorization: Bearer
+  return authStyle === 'x-api-key'
+    ? { 'x-api-key': apiKey }
+    : { 'Authorization': `Bearer ${apiKey}` };
+}
+
+function apiPost(hostname, endpoint, body, apiKey, authStyle = 'bearer') {
   const payload = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = https.request({
@@ -47,7 +54,7 @@ function apiPost(hostname, endpoint, body, apiKey) {
       path:   endpoint,
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        ...buildAuthHeaders(apiKey, authStyle),
         'Content-Type':  'application/json',
         'Content-Length': Buffer.byteLength(payload),
       },
@@ -66,9 +73,9 @@ function apiPost(hostname, endpoint, body, apiKey) {
   });
 }
 
-function apiGet(hostname, endpoint, apiKey) {
+function apiGet(hostname, endpoint, apiKey, authStyle = 'bearer') {
   return new Promise((resolve, reject) => {
-    https.get({ hostname, path: endpoint, headers: { 'Authorization': `Bearer ${apiKey}` } }, (res) => {
+    https.get({ hostname, path: endpoint, headers: buildAuthHeaders(apiKey, authStyle) }, (res) => {
       let data = '';
       res.on('data', c => { data += c; });
       res.on('end', () => {
@@ -137,9 +144,13 @@ async function higgsfieldLipSync({ photoUrl, audioUrl }) {
 // ─── Provedor 2: muapi.ai lip sync ───────────────────────────────────────────
 
 async function muapiLipSync({ photoUrl, audioUrl }) {
-  const model = process.env.MUAPI_LIPSYNC_MODEL || 'latentsync';
+  // Modelo foto→vídeo falando. InfiniteTalk / WAN 2.2 s2v aceitam uma
+  // imagem estática + áudio e geram o vídeo falando (image-to-video).
+  // NÃO usar "latent-sync" aqui: latent-sync é vídeo→vídeo (precisa de
+  // um vídeo de entrada, não de uma foto).
+  const model = process.env.MUAPI_LIPSYNC_MODEL || 'infinitetalk-image-to-video';
   const resp = await withRetry(
-    () => apiPost('api.muapi.ai', `/api/v1/${model}`, { image_url: photoUrl, audio_url: audioUrl }, MUAPI_KEY),
+    () => apiPost('api.muapi.ai', `/api/v1/${model}`, { image_url: photoUrl, audio_url: audioUrl }, MUAPI_KEY, 'x-api-key'),
     { maxAttempts: 3, baseDelayMs: 3000, context: 'muapi-lipsync' }
   );
 
@@ -150,14 +161,17 @@ async function muapiLipSync({ photoUrl, audioUrl }) {
   while (Date.now() < deadline) {
     await sleep(12000);
     const result = await withRetry(
-      () => apiGet('api.muapi.ai', `/api/v1/predictions/${requestId}/result`, MUAPI_KEY),
+      () => apiGet('api.muapi.ai', `/api/v1/predictions/${requestId}/result`, MUAPI_KEY, 'x-api-key'),
       { maxAttempts: 3, context: 'muapi-lipsync-poll' }
     );
     const status = result?.status;
     if (status === 'completed' || status === 'succeeded') {
-      return result?.output?.url || result?.output?.[0];
+      // A API retorna outputs[] (plural). Mantém fallbacks por segurança.
+      const url = result?.outputs?.[0] || result?.output?.url || result?.output?.[0] || result?.video_url;
+      if (!url) throw new Error(`muapi lip sync completou sem URL: ${JSON.stringify(result).substring(0, 200)}`);
+      return url;
     }
-    if (status === 'failed') throw new Error('muapi lip sync falhou');
+    if (status === 'failed' || status === 'error') throw new Error('muapi lip sync falhou');
   }
   throw new Error('muapi lip sync timeout');
 }

@@ -31,8 +31,8 @@ function apiCall(method, path, body = null) {
 
   const payload = body ? JSON.stringify(body) : null;
   const headers = {
-    'Authorization': `Bearer ${API_KEY}`,
-    'Content-Type':  'application/json',
+    'x-api-key':    API_KEY,   // muapi.ai exige x-api-key (não Bearer)
+    'Content-Type': 'application/json',
   };
   if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
 
@@ -88,7 +88,7 @@ async function pollResult(requestId, { maxWaitMs = 600000, intervalMs = 15000 } 
     log.debug(`muapi poll ${requestId}: ${status}`);
 
     if (status === 'completed' || status === 'succeeded') {
-      const url = resp?.output?.url || resp?.output?.[0] || resp?.video_url;
+      const url = resp?.outputs?.[0] || resp?.output?.url || resp?.output?.[0] || resp?.video_url;
       if (!url) throw new Error('muapi: completed mas sem URL de vídeo');
       log.info(`muapi: vídeo pronto → ${url.substring(0, 60)}`);
       return url;
