@@ -417,14 +417,20 @@ function scheduleCron() {
       runPipeline('fetch').then(() => runPipeline('generate')).catch(e => log.error('[CRON]', { error: e.message }));
     }
 
-    // 08h00 e 20h00 → compose + publish + stories
+    // 08h00 e 20h00 → compose (e publish/stories só se AUTO_PUBLISH=true)
     if ([8, 20].includes(h) && m === 0 && !seen.has(key('publish'))) {
       seen.add(key('publish'));
-      log.info(`[CRON ${h}h] compose → publish → stories`);
-      runPipeline('compose')
-        .then(() => runPipeline('publish'))
-        .then(() => runPipeline('stories'))
-        .catch(e => log.error('[CRON]', { error: e.message }));
+      const autoPublish = process.env.AUTO_PUBLISH === 'true';
+      if (autoPublish) {
+        log.info(`[CRON ${h}h] compose → publish → stories (AUTO_PUBLISH ligado)`);
+        runPipeline('compose')
+          .then(() => runPipeline('publish'))
+          .then(() => runPipeline('stories'))
+          .catch(e => log.error('[CRON]', { error: e.message }));
+      } else {
+        log.info(`[CRON ${h}h] compose (AUTO_PUBLISH desligado — NÃO publica; revise e use /api/run/publish)`);
+        runPipeline('compose').catch(e => log.error('[CRON]', { error: e.message }));
+      }
     }
 
     // A cada 30 min → respond
