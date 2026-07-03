@@ -1,7 +1,7 @@
 {
-  "name": "velvet-cluster",
+  "name": "aros-private",
   "version": "1.0.0",
-  "description": "",
+  "description": "arOS — versão privada: dashboard self-hosted de Agentes Resolutivos movido a Claude",
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
