@@ -35,6 +35,12 @@ const MUSIC_PATH     = process.env.MUSIC_PATH        || path.join(__dirname, '..
 const PUBLIC_BASE    = (process.env.PUBLIC_BASE_URL  || 'http://localhost:3457').replace(/\/$/, '');
 const OUTPUT_DIR     = path.join(__dirname, '../../tmp/videos');
 
+// ─── Formato react tela dividida (produto em cima, sua reação embaixo) ──────────
+const VIDEO_STYLE   = process.env.VIDEO_STYLE  || 'standard';   // 'split_react' ativa o formato react
+const REACTION_DIR  = process.env.REACTION_DIR || path.join(__dirname, '../../assets/reactions');
+// Fração da altura ocupada pelo produto (topo). 0.5 = 50/50 como nos reels dele.
+const SPLIT_TOP_PCT = Math.min(Math.max(parseFloat(process.env.SPLIT_TOP_PCT || '0.5'), 0.35), 0.7);
+
 const DIMENSIONS = {
   reels: { w: 1080, h: 1920 },
   feed:  { w: 1080, h: 1080 },
@@ -185,6 +191,128 @@ async function compose({ product, rawVideoPath, ttsPath }) {
   };
 }
 
+// ─── Formato REACT tela dividida ──────────────────────────────────────────────
+
+function pickReactionClip() {
+  try {
+    const files = fs.readdirSync(REACTION_DIR)
+      .filter(f => /\.(mp4|mov|webm|m4v)$/i.test(f));
+    if (!files.length) return null;
+    return path.join(REACTION_DIR, files[Math.floor(Math.random() * files.length)]);
+  } catch { return null; }
+}
+
+function escDrawtext(s) {
+  return String(s).replace(/\\/g, '').replace(/[':]/g, ' ').replace(/%/g, ' por cento');
+}
+
+/**
+ * Compõe vídeo react: [produto no topo] + [sua reação embaixo] + hook + narração.
+ *
+ * @param {object} opts
+ * @param {object} opts.product
+ * @param {string} opts.productVisualPath - vídeo/imagem do produto (topo)
+ * @param {string} opts.reactionPath      - clipe seu reagindo (embaixo)
+ * @param {string} opts.ttsPath           - narração (opcional)
+ */
+async function composeSplitReact({ product, productVisualPath, reactionPath, ttsPath }) {
+  const { w, h } = DIMENSIONS.reels;
+  const topH = Math.round((h * SPLIT_TOP_PCT) / 2) * 2;  // par p/ libx264
+  const botH = h - topH;
+
+  const filename   = `product_${product.id}_final.mp4`;
+  const outputPath = path.join(OUTPUT_DIR, filename);
+  const tmpPath    = path.join(OUTPUT_DIR, `product_${product.id}_tmp.mp4`);
+
+  const discount = product.price_original > 0
+    ? Math.round((1 - product.price_discount / product.price_original) * 100)
+    : 0;
+  const priceText = product.price_discount > 0
+    ? `DE ${formatBRL(product.price_original)} POR ${formatBRL(product.price_discount)}`
+    : formatBRL(product.price_discount || product.price_original);
+  const hookText  = escDrawtext(
+    discount >= 5
+      ? `OLHA ISSO • ${discount}% OFF`
+      : (product.name.substring(0, 34).toUpperCase())
+  );
+  const priceDraw = escDrawtext(priceText);
+
+  const hasMusic = fileExists(MUSIC_PATH);
+  const hasTTS   = ttsPath && fileExists(ttsPath);
+
+  // Duração guiada pela narração
+  let targetDuration = Math.min(MAX_DURATION, 20);
+  if (hasTTS) {
+    const d = await getAudioDuration(ttsPath);
+    if (d) targetDuration = Math.min(Math.ceil(d) + 1, MAX_DURATION);
+  }
+
+  // Inputs (produto e reação em loop pra cobrir a duração da narração)
+  const args = [];
+  const isImage = /\.(jpe?g|png|webp)$/i.test(productVisualPath);
+  if (isImage) args.push('-loop', '1', '-i', productVisualPath);
+  else         args.push('-stream_loop', '-1', '-i', productVisualPath);
+  args.push('-stream_loop', '-1', '-i', reactionPath);
+
+  let idx = 2;
+  const ttsIdx   = hasTTS   ? idx++ : null; if (hasTTS)   args.push('-i', ttsPath);
+  const musicIdx = hasMusic ? idx++ : null; if (hasMusic) args.push('-stream_loop', '-1', '-i', MUSIC_PATH);
+
+  // Grafo de filtros: escala/crop cada metade → empilha → hook + preço
+  const topVf = `scale=${w}:${topH}:force_original_aspect_ratio=increase,crop=${w}:${topH},setsar=1`;
+  const botVf = `scale=${w}:${botH}:force_original_aspect_ratio=increase,crop=${w}:${botH},setsar=1`;
+  const overlay = [
+    // barra do hook logo acima da divisão (estilo dos reels dele)
+    `drawbox=x=0:y=${topH - 150}:w=iw:h=150:color=black@0.6:t=fill`,
+    `drawtext=text='${hookText}':fontsize=52:fontcolor=white:x=(w-text_w)/2:y=${topH - 130}:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+    `drawtext=text='${priceDraw}':fontsize=40:fontcolor=yellow:x=(w-text_w)/2:y=${topH - 70}:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+    // CTA no rodapé
+    `drawtext=text='LINK NA BIO':fontsize=38:fontcolor=white:x=(w-text_w)/2:y=${h - 90}:box=1:boxcolor=red@0.85:boxborderw=14`,
+  ].join(',');
+
+  const graph = [
+    `[0:v]${topVf}[top]`,
+    `[1:v]${botVf}[bot]`,
+    `[top][bot]vstack=inputs=2[stk]`,
+    `[stk]${overlay}[vout]`,
+  ];
+  const maps = ['-map', '[vout]'];
+
+  if (hasTTS && hasMusic) {
+    graph.push(`[${musicIdx}:a]volume=0.12,afade=t=out:st=${Math.max(targetDuration - 2, 1)}:d=2[m]`);
+    graph.push(`[${ttsIdx}:a]volume=1.0[s]`);
+    graph.push(`[m][s]amix=inputs=2:duration=first[aout]`);
+    maps.push('-map', '[aout]');
+  } else if (hasTTS) {
+    maps.push('-map', `${ttsIdx}:a`);
+  } else if (hasMusic) {
+    graph.push(`[${musicIdx}:a]volume=0.25[aout]`);
+    maps.push('-map', '[aout]');
+  }
+
+  args.push('-filter_complex', graph.join(';'), ...maps);
+  args.push(
+    '-t',        String(targetDuration),
+    '-c:v',      'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a',      'aac', '-b:a', '128k',
+    '-movflags', '+faststart',
+    '-pix_fmt',  'yuv420p',
+    tmpPath,
+  );
+
+  log.info(`Renderizando REACT [${product.id}] ${w}×${h} ${targetDuration}s ` +
+    `(produto ${Math.round(SPLIT_TOP_PCT * 100)}% / reação ${Math.round((1 - SPLIT_TOP_PCT) * 100)}%)`);
+
+  await ffmpeg(args);
+  fs.renameSync(tmpPath, outputPath);
+  log.info(`Vídeo react pronto: ${filename}`);
+
+  return {
+    localPath: outputPath,
+    publicUrl: `${PUBLIC_BASE}/videos/${filename}`,
+  };
+}
+
 // ─── Pipeline por produto ─────────────────────────────────────────────────────
 
 async function processProduct(product) {
@@ -218,41 +346,60 @@ async function processProduct(product) {
   const generatedTtsPath = narrationResult?.path || null;
   if (narrationResult) log.info(`Narração: ${narrationResult.source}`);
 
-  // 3. Compõe vídeo do produto com ffmpeg
-  const { localPath, publicUrl } = await compose({
-    product,
-    rawVideoPath: rawPath,
-    ttsPath:      generatedTtsPath,
-  });
+  // 3. Compõe o vídeo — formato REACT tela dividida OU padrão
+  let localPath, publicUrl;
 
-  // 4. Gera clipe do avatar (foto do usuário + lip sync) e prepende ao vídeo
-  let finalLocalPath = localPath;
-  let finalPublicUrl = publicUrl;
-  const avatarPath = await generateAvatarClip({
-    localAudioPath:  generatedTtsPath,
-    audioPublicUrl:  generatedTtsPath
-      ? `${PUBLIC_BASE}/videos/${path.basename(generatedTtsPath)}`
-      : null,
-    productId: product.id,
-  });
-
-  if (avatarPath) {
-    const withAvatarPath = path.join(OUTPUT_DIR, `product_${product.id}_with_avatar.mp4`);
-    try {
-      await prependAvatarToVideo({
-        avatarPath,
-        productVideoPath: localPath,
-        outputPath:       withAvatarPath,
-      });
-      // Substitui o vídeo final pelo que tem o avatar
-      fs.unlinkSync(localPath);
-      fs.renameSync(withAvatarPath, localPath);
-      log.info(`Avatar integrado ao vídeo [${product.id}]`);
-    } catch (err) {
-      log.warn(`Avatar não pôde ser integrado: ${err.message}`);
+  if (VIDEO_STYLE === 'split_react') {
+    const reactionPath = pickReactionClip();
+    if (!reactionPath) {
+      throw new Error(
+        'VIDEO_STYLE=split_react mas nenhum clipe de reação encontrado em ' +
+        `${REACTION_DIR}. Grave clipes seus reagindo e coloque nessa pasta.`
+      );
     }
-    fs.unlink(avatarPath, () => {});
+    log.info(`Reação escolhida [${product.id}]: ${path.basename(reactionPath)}`);
+    ({ localPath, publicUrl } = await composeSplitReact({
+      product,
+      productVisualPath: rawPath,
+      reactionPath,
+      ttsPath: generatedTtsPath,
+    }));
+  } else {
+    ({ localPath, publicUrl } = await compose({
+      product,
+      rawVideoPath: rawPath,
+      ttsPath:      generatedTtsPath,
+    }));
+
+    // Avatar lip-sync (apenas no formato padrão)
+    const avatarPath = await generateAvatarClip({
+      localAudioPath:  generatedTtsPath,
+      audioPublicUrl:  generatedTtsPath
+        ? `${PUBLIC_BASE}/videos/${path.basename(generatedTtsPath)}`
+        : null,
+      productId: product.id,
+    });
+
+    if (avatarPath) {
+      const withAvatarPath = path.join(OUTPUT_DIR, `product_${product.id}_with_avatar.mp4`);
+      try {
+        await prependAvatarToVideo({
+          avatarPath,
+          productVideoPath: localPath,
+          outputPath:       withAvatarPath,
+        });
+        fs.unlinkSync(localPath);
+        fs.renameSync(withAvatarPath, localPath);
+        log.info(`Avatar integrado ao vídeo [${product.id}]`);
+      } catch (err) {
+        log.warn(`Avatar não pôde ser integrado: ${err.message}`);
+      }
+      fs.unlink(avatarPath, () => {});
+    }
   }
+
+  const finalLocalPath = localPath;
+  const finalPublicUrl = publicUrl;
 
   // 5. Persiste no banco
   await query(
